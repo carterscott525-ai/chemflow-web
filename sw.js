@@ -1,6 +1,8 @@
-// ChemFlow service worker — caches the app shell so it opens with no signal.
-// Data is handled by the app (route cache + offline visit queue in IndexedDB).
-var CACHE = 'chemflow-v1';
+// ChemFlow service worker — network-first for the app shell so updates land
+// immediately when online; the cache is the offline fallback (the app queues
+// offline data work itself in IndexedDB). Bump CACHE on every shell change
+// so old caches are dropped on activate.
+var CACHE = 'chemflow-v2';
 var SHELL = ['.', 'index.html', 'app.js', 'config.js', 'manifest.json'];
 
 self.addEventListener('install', function(e){
@@ -16,12 +18,12 @@ self.addEventListener('fetch', function(e){
   if(e.request.method !== 'GET') return;
   if(url.origin === location.origin){
     e.respondWith(
-      caches.match(e.request, { ignoreSearch: true }).then(function(hit){
-        return hit || fetch(e.request).then(function(resp){
-          var copy = resp.clone();
-          caches.open(CACHE).then(function(c){ c.put(e.request, copy); });
-          return resp;
-        });
+      fetch(e.request).then(function(resp){
+        var copy = resp.clone();
+        caches.open(CACHE).then(function(c){ c.put(e.request, copy); });
+        return resp;
+      }).catch(function(){
+        return caches.match(e.request, { ignoreSearch: true });
       })
     );
   }
