@@ -1,0 +1,186 @@
+-- ChemFlow Web — Phase 1 schema (Supabase / Postgres)
+-- Multi-tenant: every tenant row carries business_id; RLS enforces isolation
+-- via my_business_id() / my_role() derived from the signed-in user's profile.
+
+create or replace function public.my_business_id()
+returns uuid language sql stable security definer set search_path = public
+as $$ select business_id from public.profiles where id = auth.uid() $$;
+
+create or replace function public.my_role()
+returns text language sql stable security definer set search_path = public
+as $$ select role from public.profiles where id = auth.uid() $$;
+
+-- ============ tables ============
+
+create table public.businesses (
+  id uuid primary key default gen_random_uuid(),
+  name text not null,
+  owner_email text,
+  settings jsonb not null default '{}'::jsonb,
+  device_endpoint text,
+  created_at timestamptz not null default now()
+);
+
+create table public.profiles (
+  id uuid primary key references auth.users(id) on delete cascade,
+  business_id uuid not null references public.businesses(id) on delete cascade,
+  role text not null check (role in ('owner','tech')),
+  name text,
+  email text,
+  created_at timestamptz not null default now()
+);
+
+create table public.invites (
+  id uuid primary key default gen_random_uuid(),
+  business_id uuid not null references public.businesses(id) on delete cascade,
+  email text not null,
+  role text not null default 'tech' check (role in ('owner','tech')),
+  created_at timestamptz not null default now(),
+  unique (business_id, email)
+);
+
+create table public.customers (
+  id uuid primary key default gen_random_uuid(),
+  business_id uuid not null references public.businesses(id) on delete cascade,
+  name text not null,
+  address text,
+  phone text,
+  email text,
+  service_day text,
+  technician_id uuid references public.profiles(id) on delete set null,
+  ph_min numeric not null default 7.2,
+  ph_max numeric not null default 7.8,
+  orp_min numeric not null default 800,
+  orp_max numeric not null default 850,
+  active boolean not null default true,
+  created_at timestamptz not null default now()
+);
+
+create table public.bodies_of_water (
+  id uuid primary key default gen_random_uuid(),
+  business_id uuid not null references public.businesses(id) on delete cascade,
+  customer_id uuid not null references public.customers(id) on delete cascade,
+  name text not null default 'Main Pool',
+  created_at timestamptz not null default now()
+);
+
+create table public.checklist_templates (
+  id uuid primary key default gen_random_uuid(),
+  business_id uuid not null references public.businesses(id) on delete cascade,
+  name text not null default 'Standard Visit',
+  steps jsonb not null default '[]'::jsonb,
+  created_at timestamptz not null default now()
+);
+
+create table public.visits (
+  id uuid primary key default gen_random_uuid(),
+  business_id uuid not null references public.businesses(id) on delete cascade,
+  customer_id uuid not null references public.customers(id) on delete cascade,
+  body_id uuid references public.bodies_of_water(id) on delete set null,
+  tech_id uuid references public.profiles(id) on delete set null,
+  started_at timestamptz not null,
+  finished_at timestamptz,
+  duration_sec integer,
+  label text not null default 'Web Check-In',
+  fc numeric, tc numeric, ph numeric, ta numeric, th numeric,
+  stabilizer numeric, orp numeric, tds numeric, temp numeric,
+  notes text,
+  created_at timestamptz not null default now()
+);
+
+create table public.visit_checklist (
+  id uuid primary key default gen_random_uuid(),
+  business_id uuid not null references public.businesses(id) on delete cascade,
+  visit_id uuid not null references public.visits(id) on delete cascade,
+  step_label text not null,
+  done boolean not null default false
+);
+
+create table public.visit_photos (
+  id uuid primary key default gen_random_uuid(),
+  business_id uuid not null references public.businesses(id) on delete cascade,
+  visit_id uuid not null references public.visits(id) on delete cascade,
+  storage_path text not null
+);
+
+-- ============ row level security ============
+
+alter table public.businesses enable row level security;
+alter table public.profiles enable row level security;
+alter table public.invites enable row level security;
+alter table public.customers enable row level security;
+alter table public.bodies_of_water enable row level security;
+alter table public.checklist_templates enable row level security;
+alter table public.visits enable row level security;
+alter table public.visit_checklist enable row level security;
+alter table public.visit_photos enable row level security;
+
+-- businesses: any signed-in user can create one; members can read; owner can update
+create policy biz_insert on public.businesses for insert to authenticated with check (true);
+create policy biz_select on public.businesses for select to authenticated using (id = public.my_business_id());
+create policy biz_update on public.businesses for update to authenticated
+  using (id = public.my_business_id() and public.my_role() = 'owner')
+  with check (id = public.my_business_id() and public.my_role() = 'owner');
+
+-- profiles: create your own; read own + same-business; update own
+create policy prof_insert on public.profiles for insert to authenticated with check (id = auth.uid());
+create policy prof_select on public.profiles for select to authenticated
+  using (id = auth.uid() or business_id = public.my_business_id());
+create policy prof_update on public.profiles for update to authenticated using (id = auth.uid()) with check (id = auth.uid());
+
+-- invites: owner manages own business's invites; invitee can read invites for their email
+create policy inv_owner on public.invites for all to authenticated
+  using (business_id = public.my_business_id() and public.my_role() = 'owner')
+  with check (business_id = public.my_business_id() and public.my_role() = 'owner');
+create policy inv_read on public.invites for select to authenticated using (email = auth.email());
+create policy inv_delete_self on public.invites for delete to authenticated using (email = auth.email());
+
+-- customers: members read; owner writes
+create policy cust_select on public.customers for select to authenticated using (business_id = public.my_business_id());
+create policy cust_write on public.customers for insert to authenticated
+  with check (business_id = public.my_business_id() and public.my_role() = 'owner');
+create policy cust_update on public.customers for update to authenticated
+  using (business_id = public.my_business_id() and public.my_role() = 'owner')
+  with check (business_id = public.my_business_id() and public.my_role() = 'owner');
+create policy cust_delete on public.customers for delete to authenticated
+  using (business_id = public.my_business_id() and public.my_role() = 'owner');
+
+-- bodies of water: members read; owner writes
+create policy bow_select on public.bodies_of_water for select to authenticated using (business_id = public.my_business_id());
+create policy bow_write on public.bodies_of_water for all to authenticated
+  using (business_id = public.my_business_id() and public.my_role() = 'owner')
+  with check (business_id = public.my_business_id() and public.my_role() = 'owner');
+
+-- checklist templates: members read; owner writes
+create policy tpl_select on public.checklist_templates for select to authenticated using (business_id = public.my_business_id());
+create policy tpl_write on public.checklist_templates for all to authenticated
+  using (business_id = public.my_business_id() and public.my_role() = 'owner')
+  with check (business_id = public.my_business_id() and public.my_role() = 'owner');
+
+-- visits: members of the business can read visits in their business
+-- (owner sees all; techs see all in-business for route context in Phase 1)
+create policy vis_select on public.visits for select to authenticated using (business_id = public.my_business_id());
+create policy vis_insert on public.visits for insert to authenticated
+  with check (business_id = public.my_business_id() and tech_id = auth.uid());
+create policy vis_update on public.visits for update to authenticated
+  using (business_id = public.my_business_id() and (tech_id = auth.uid() or public.my_role() = 'owner'))
+  with check (business_id = public.my_business_id());
+
+-- visit checklist + photos: same business, tied to a visit
+create policy vc_all on public.visit_checklist for all to authenticated
+  using (business_id = public.my_business_id()) with check (business_id = public.my_business_id());
+create policy vp_all on public.visit_photos for all to authenticated
+  using (business_id = public.my_business_id()) with check (business_id = public.my_business_id());
+
+-- ============ storage: visit photos ============
+
+insert into storage.buckets (id, name, public) values ('visit-photos', 'visit-photos', false);
+
+create policy photos_select on storage.objects for select to authenticated
+  using (bucket_id = 'visit-photos' and (storage.foldername(name))[1] = public.my_business_id()::text);
+create policy photos_insert on storage.objects for insert to authenticated
+  with check (bucket_id = 'visit-photos' and (storage.foldername(name))[1] = public.my_business_id()::text);
+create policy photos_update on storage.objects for update to authenticated
+  using (bucket_id = 'visit-photos' and (storage.foldername(name))[1] = public.my_business_id()::text);
+create policy photos_delete on storage.objects for delete to authenticated
+  using (bucket_id = 'visit-photos' and (storage.foldername(name))[1] = public.my_business_id()::text);
