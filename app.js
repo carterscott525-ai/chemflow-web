@@ -157,13 +157,20 @@ function showSetupCard(user){
   $('btn-setup').addEventListener('click', function(){
     var bizName = $('setup-biz').value.trim(), myName = $('setup-name').value.trim();
     if(!bizName){ showErr('setup-err','Business name is required.'); return; }
-    sb.from('businesses').insert({ name: bizName, owner_email: user.email }).select().single().then(function(b){
+    // Client-generated id: the app must not read the new row back, because the
+    // caller's profile (which the businesses SELECT policy keys off) is only
+    // created next, using this id — an INSERT ... RETURNING fails RLS for a
+    // first-time owner (chicken-and-egg, found by the 2026-11-26 re-test).
+    var bizId = (window.crypto && crypto.randomUUID)
+      ? crypto.randomUUID()
+      : 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(ch){ var r = (Math.random() * 16) | 0; var v = ch === 'x' ? r : ((r & 0x3) | 0x8); return v.toString(16); });
+    sb.from('businesses').insert({ id: bizId, name: bizName, owner_email: user.email }).then(function(b){
       if(b.error){ showErr('setup-err', b.error.message); return; }
-      var prof = { id: user.id, business_id: b.data.id, role: 'owner', email: user.email, name: myName || user.email.split('@')[0] };
+      var prof = { id: user.id, business_id: bizId, role: 'owner', email: user.email, name: myName || user.email.split('@')[0] };
       sb.from('profiles').insert(prof).then(function(ins){
         if(ins.error){ showErr('setup-err', ins.error.message); return; }
         me = prof;
-        sb.from('checklist_templates').insert({ business_id: b.data.id, name: 'Standard Visit', steps: DEFAULT_STEPS }).then(function(){
+        sb.from('checklist_templates').insert({ business_id: bizId, name: 'Standard Visit', steps: DEFAULT_STEPS }).then(function(){
           localStorage.removeItem('cf_pending_biz');
           wrap.remove();
           enterApp();
