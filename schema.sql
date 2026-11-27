@@ -85,6 +85,8 @@ create table public.visits (
   fc numeric, tc numeric, ph numeric, ta numeric, th numeric,
   stabilizer numeric, orp numeric, tds numeric, temp numeric,
   notes text,
+  checkin_lat numeric, checkin_lng numeric,
+  checkout_lat numeric, checkout_lng numeric,
   created_at timestamptz not null default now()
 );
 
@@ -184,3 +186,22 @@ create policy photos_update on storage.objects for update to authenticated
   using (bucket_id = 'visit-photos' and (storage.foldername(name))[1] = public.my_business_id()::text);
 create policy photos_delete on storage.objects for delete to authenticated
   using (bucket_id = 'visit-photos' and (storage.foldername(name))[1] = public.my_business_id()::text);
+
+-- ============ table privileges for the API roles ============
+-- Required when tables are created via SQL: unlike the Table Editor, raw DDL
+-- does not auto-grant privileges to the anon/authenticated roles, and every
+-- API call then fails with "permission denied for table ..." even though the
+-- RLS policies above are correct. (Found by the 2026-11-26 end-to-end test.)
+-- The RLS policies remain the actual access control — anon has no policies,
+-- so these grants alone expose nothing.
+grant select, insert, update, delete on all tables in schema public to authenticated;
+grant select, insert, update, delete on all tables in schema public to anon;
+
+-- ============ one-tap check-in (added 2026-11-26, Carter's rule) ============
+-- Visits record where the tech was when they tapped Check In / Check Out,
+-- when the phone provides GPS. No-op on a fresh install (columns already in
+-- the CREATE TABLE above); needed on the live project created earlier.
+alter table public.visits add column if not exists checkin_lat numeric;
+alter table public.visits add column if not exists checkin_lng numeric;
+alter table public.visits add column if not exists checkout_lat numeric;
+alter table public.visits add column if not exists checkout_lng numeric;

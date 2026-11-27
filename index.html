@@ -104,11 +104,13 @@
       <h2 class="viewtitle" id="ci-name" style="margin-top:10px;">Check In</h2>
       <div class="card">
         <div class="muted" id="ci-address"></div>
+        <div class="muted" id="ci-status"></div>
         <div class="rowbtns">
           <a class="btnlink" id="ci-nav" href="#" target="_blank" rel="noopener">Navigate</a>
           <a class="btnlink hidden" id="ci-call" href="#">Call</a>
           <a class="btnlink hidden" id="ci-text" href="#">Text</a>
         </div>
+        <button class="primary" id="btn-checkin">Check In</button>
       </div>
       <div class="card">
         <h3>Chemistry</h3>
@@ -138,7 +140,9 @@
       </div>
       <div class="err" id="ci-err"></div>
       <div class="ok" id="ci-ok"></div>
-      <button class="primary" id="btn-complete-visit">Complete Visit</button>
+      <button class="primary" id="btn-save-details">Save details</button>
+      <button class="primary" id="btn-checkout" style="background:var(--green)">Check Out</button>
+      <p class="muted">Everything on this page is optional. Check Out works with nothing filled in.</p>
     </div>
 
     <!-- CUSTOMERS -->

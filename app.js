@@ -8,9 +8,10 @@ if(!window.CF_CONFIG || !window.CF_CONFIG.url || window.CF_CONFIG.url.indexOf('Y
 }
 var sb = window.supabase.createClient(window.CF_CONFIG.url, window.CF_CONFIG.anonKey);
 
-// Steps seeded for a new business's "Standard Visit" template (patched to the
-// exact Genesis ChemFlo template steps before launch; editable in Settings).
-var DEFAULT_STEPS = ["Check probe is online", "Log chemistry (pH, ORP, chlorine)"];
+// Steps seeded for a new business's "Standard Visit" template — the exact
+// Genesis ChemFlo template steps (read from the sheet 2026-11-26); editable
+// per business in Settings.
+var DEFAULT_STEPS = ["Check probe is online", "Log chemistry (pH, ORP, chlorine)", "Check dispenser status", "Add service notes"];
 
 var me = null;          // profile row
 var business = null;    // business row
@@ -77,6 +78,43 @@ function pendingSet(){
 function markPending(customerId){
   var s = pendingSet(); if(s.indexOf(customerId) < 0) s.push(customerId);
   localStorage.setItem('cf_pending_' + dateKey(), JSON.stringify(s));
+}
+
+/* ------- one-tap check-in helpers (Carter's rule, 2026-11-26) ------- */
+function newUuid(){
+  if(window.crypto && crypto.randomUUID) return crypto.randomUUID();
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(ch){ var r = (Math.random() * 16) | 0; var v = ch === 'x' ? r : ((r & 0x3) | 0x8); return v.toString(16); });
+}
+function getPos(){
+  // GPS is a bonus, never a blocker: resolve with the position if the phone
+  // offers one quickly, otherwise null after ~3.5s.
+  return new Promise(function(res){
+    if(!navigator.geolocation) return res(null);
+    var done = false;
+    var t = setTimeout(function(){ if(!done){ done = true; res(null); } }, 3500);
+    try {
+      navigator.geolocation.getCurrentPosition(function(p){
+        if(done) return; done = true; clearTimeout(t);
+        res({ lat: p.coords.latitude, lng: p.coords.longitude });
+      }, function(){ if(!done){ done = true; clearTimeout(t); res(null); } }, { timeout: 10000, maximumAge: 60000 });
+    } catch(e){ if(!done){ done = true; clearTimeout(t); res(null); } }
+  });
+}
+function fmtTime(iso){
+  var d = new Date(iso);
+  return isNaN(d) ? '' : d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+}
+function localOpenMap(){
+  try { return JSON.parse(localStorage.getItem('cf_open_' + dateKey()) || '{}'); } catch(e){ return {}; }
+}
+function setLocalOpen(customerId, visitId, startedAtIso){
+  var m = localOpenMap(); m[customerId] = { visitId: visitId, startedAt: startedAtIso };
+  try { localStorage.setItem('cf_open_' + dateKey(), JSON.stringify(m)); } catch(e){}
+}
+function clearLocalOpen(customerId, visitId){
+  var m = localOpenMap();
+  if(m[customerId] && (!visitId || m[customerId].visitId === visitId)) delete m[customerId];
+  try { localStorage.setItem('cf_open_' + dateKey(), JSON.stringify(m)); } catch(e){}
 }
 
 /* ---------------- auth & bootstrap ---------------- */
@@ -245,7 +283,7 @@ function renderRoute(){
     var customers = r.data || [];
     var ids = customers.map(function(c){ return c.id; });
     var visitedP = ids.length
-      ? sb.from('visits').select('customer_id, ph, orp, tds, temp, started_at').eq('business_id', me.business_id)
+      ? sb.from('visits').select('id, customer_id, ph, orp, tds, temp, fc, tc, ta, th, stabilizer, notes, started_at, finished_at').eq('business_id', me.business_id)
           .gte('started_at', bounds.start).lt('started_at', bounds.end)
         .then(function(v){ return v.data || []; })
       : Promise.resolve([]);
@@ -264,10 +302,14 @@ function renderRoute(){
       res[2].forEach(function(b){ if(!bodyByCust[b.customer_id]) bodyByCust[b.customer_id] = b.id; });
       customers.forEach(function(c){ c._bodyId = bodyByCust[c.id] || null; });
       var visitedIds = {};
-      res[0].forEach(function(v){ visitedIds[v.customer_id] = true; });
+      var openVisits = {};
+      res[0].forEach(function(v){
+        if(v.finished_at) visitedIds[v.customer_id] = true;
+        else if(!openVisits[v.customer_id]) openVisits[v.customer_id] = v;
+      });
       var lastByCust = {};
       res[1].forEach(function(v){ if(!lastByCust[v.customer_id]) lastByCust[v.customer_id] = v; });
-      var payload = { customers: customers, visitedIds: visitedIds, lastByCust: lastByCust, profilesMap: profilesMap, templateSteps: template ? template.steps : DEFAULT_STEPS, savedAt: Date.now() };
+      var payload = { customers: customers, visitedIds: visitedIds, openVisits: openVisits, lastByCust: lastByCust, profilesMap: profilesMap, templateSteps: template ? template.steps : DEFAULT_STEPS, savedAt: Date.now() };
       try { localStorage.setItem('cf_route_' + dateKey(), JSON.stringify(payload)); } catch(e){}
       drawRoute(payload);
     });
@@ -288,18 +330,34 @@ function drawRoute(payload, note){
   if(!payload.customers.length){
     html += '<div class="card"><p class="muted">No stops scheduled for today. Enjoy the quiet — or check Customers for the week\'s list.</p></div>';
   }
+  var localOpen = localOpenMap();
   payload.customers.forEach(function(c){
-    var done = payload.visitedIds[c.id] || pend.indexOf(c.id) >= 0;
+    var serverOpen = (payload.openVisits || {})[c.id];
+    var localRec = localOpen[c.id];
+    var openInfo = serverOpen
+      ? { visitId: serverOpen.id, startedAt: serverOpen.started_at }
+      : (localRec ? { visitId: localRec.visitId, startedAt: localRec.startedAt } : null);
+    var done = !openInfo && (payload.visitedIds[c.id] || pend.indexOf(c.id) >= 0);
     var last = payload.lastByCust[c.id];
     var chip = last && last.ph != null
       ? '<span class="chip">Last: pH ' + esc(last.ph) + ' · ORP ' + esc(last.orp == null ? '—' : last.orp) + '</span>'
       : '<span class="chip">No readings yet</span>';
     var techName = c.technician_id && payload.profilesMap[c.technician_id] ? payload.profilesMap[c.technician_id].name || payload.profilesMap[c.technician_id].email : 'Unassigned';
+    var action = '';
+    if(openInfo){
+      action = ' <span class="chip done">Checked in · ' + esc(fmtTime(openInfo.startedAt)) + '</span>' +
+        '<div class="rowbtns"><button class="ghost" data-act="details" data-cust="' + c.id + '">Add details</button>' +
+        '<button class="ghost" data-act="checkout" data-cust="' + c.id + '">Check Out</button></div>';
+    } else if(done){
+      action = ' <span class="chip done">Visited today</span>';
+    } else {
+      action = '<div class="rowbtns"><button class="ghost" data-act="checkin" data-cust="' + c.id + '">Check In</button></div>';
+    }
     html += '<div class="card stopcard" data-cust="' + c.id + '">' +
       '<h3>' + esc(c.name) + '</h3>' +
       '<div class="muted">' + esc(c.address || '') + '</div>' +
       '<div class="muted">Tech: ' + esc(techName) + '</div>' +
-      chip + (done ? ' <span class="chip done">Visited today</span>' : '') +
+      chip + action +
       '</div>';
   });
   $('route-list').innerHTML = html;
@@ -310,13 +368,107 @@ function drawRoute(payload, note){
       if(cust) openCheckin(cust, payload);
     });
   });
+  Array.prototype.forEach.call(document.querySelectorAll('[data-act]'), function(btn){
+    btn.addEventListener('click', function(ev){
+      ev.stopPropagation();
+      var id = btn.getAttribute('data-cust');
+      var cust = payload.customers.filter(function(c){ return c.id === id; })[0];
+      if(!cust) return;
+      var act = btn.getAttribute('data-act');
+      if(act === 'checkin'){
+        btn.disabled = true; btn.textContent = 'Checking in…';
+        doCheckin(cust).then(function(){ renderRoute(); });
+      } else if(act === 'details'){
+        openCheckin(cust, payload);
+      } else if(act === 'checkout'){
+        var serverOpen = (payload.openVisits || {})[cust.id];
+        var localRec = localOpenMap()[cust.id];
+        var info = serverOpen
+          ? { visitId: serverOpen.id, startedAt: serverOpen.started_at }
+          : (localRec ? { visitId: localRec.visitId, startedAt: localRec.startedAt } : null);
+        if(info){
+          btn.disabled = true; btn.textContent = 'Checking out…';
+          doCheckoutFor(cust, info).then(function(){ renderRoute(); });
+        }
+      }
+    });
+  });
 }
 
-/* ---------------- check-in ---------------- */
+/* ---------------- check-in (one tap; everything else optional) ---------------- */
+function doCheckin(customer){
+  var startedAt = new Date();
+  var visitId = newUuid();
+  return getPos().then(function(pos){
+    var visit = {
+      id: visitId,
+      business_id: me.business_id,
+      customer_id: customer.id,
+      body_id: customer._bodyId || null,
+      tech_id: me.id,
+      started_at: startedAt.toISOString(),
+      label: 'Web Check-In',
+      checkin_lat: pos ? pos.lat : null,
+      checkin_lng: pos ? pos.lng : null
+    };
+    var info = { visitId: visitId, startedAt: visit.started_at };
+    var queued = function(){
+      return queueAdd({ type: 'checkin', visit: visit }).then(function(){
+        setLocalOpen(customer.id, visitId, visit.started_at);
+        updateQueueBar();
+        return info;
+      });
+    };
+    if(!navigator.onLine) return queued();
+    return sb.from('visits').upsert(visit).then(function(r){
+      if(r.error) return queued();
+      setLocalOpen(customer.id, visitId, visit.started_at);
+      return info;
+    }).catch(queued);
+  });
+}
+function doCheckoutFor(customer, openInfo){
+  var finished = new Date();
+  var started = new Date(openInfo.startedAt);
+  return getPos().then(function(pos){
+    var patch = {
+      finished_at: finished.toISOString(),
+      duration_sec: Math.max(0, Math.round((finished - started) / 1000)),
+      checkout_lat: pos ? pos.lat : null,
+      checkout_lng: pos ? pos.lng : null
+    };
+    var doneLocal = function(){ clearLocalOpen(customer.id, openInfo.visitId); markPending(customer.id); };
+    var queued = function(){
+      return queueAdd({ type: 'checkout', visitId: openInfo.visitId, customerId: customer.id, patch: patch }).then(function(){
+        doneLocal(); updateQueueBar();
+      });
+    };
+    if(!navigator.onLine) return queued();
+    return sb.from('visits').update(patch).eq('id', openInfo.visitId).then(function(r){
+      if(r.error) return queued();
+      doneLocal();
+    }).catch(queued);
+  });
+}
+function refreshCiChrome(){
+  var open = !!(ci && ci.visitId);
+  $('btn-checkin').classList.toggle('hidden', open);
+  $('btn-save-details').classList.toggle('hidden', !open);
+  $('btn-checkout').classList.toggle('hidden', !open);
+  $('ci-status').textContent = open
+    ? 'Checked in at ' + fmtTime(ci.startedAt.toISOString()) + ' — everything below is optional.'
+    : 'Not checked in yet — tap Check In when you arrive. Nothing else is required.';
+}
 function openCheckin(customer, routePayload){
   var steps = (template && template.steps) || (routePayload && routePayload.templateSteps) || DEFAULT_STEPS;
   var last = routePayload && routePayload.lastByCust ? routePayload.lastByCust[customer.id] : null;
-  ci = { customer: customer, startedAt: new Date(), photos: [], steps: steps };
+  var serverOpen = routePayload && routePayload.openVisits ? routePayload.openVisits[customer.id] : null;
+  var localRec = localOpenMap()[customer.id];
+  var openRow = serverOpen || null;
+  var openInfo = serverOpen
+    ? { visitId: serverOpen.id, startedAt: serverOpen.started_at }
+    : (localRec ? { visitId: localRec.visitId, startedAt: localRec.startedAt } : null);
+  ci = { customer: customer, visitId: openInfo ? openInfo.visitId : null, startedAt: openInfo ? new Date(openInfo.startedAt) : null, photos: [], steps: steps };
   ['route','customers','team','settings'].forEach(function(t){ $('tab-' + t).classList.add('hidden'); });
   $('tab-checkin').classList.remove('hidden');
   $('ci-name').textContent = customer.name;
@@ -326,23 +478,56 @@ function openCheckin(customer, routePayload){
     $('ci-call').href = 'tel:' + customer.phone; $('ci-call').classList.remove('hidden');
     $('ci-text').href = 'sms:' + customer.phone; $('ci-text').classList.remove('hidden');
   } else { $('ci-call').classList.add('hidden'); $('ci-text').classList.add('hidden'); }
-  // Prefill from the most recent visit's readings (device prefill arrives with the device layer).
-  $('ci-ph').value = last && last.ph != null ? last.ph : '';
-  $('ci-orp').value = last && last.orp != null ? last.orp : '';
-  $('ci-tds').value = last && last.tds != null ? last.tds : '';
-  $('ci-temp').value = last && last.temp != null ? last.temp : '';
-  $('ci-fc').value = ''; $('ci-tc').value = ''; $('ci-ta').value = ''; $('ci-th').value = ''; $('ci-stab').value = '';
-  $('ci-notes').value = '';
-  $('ci-prefill-note').textContent = last ? 'Pre-filled from the last visit — confirm or correct before saving.' : '';
+  // Prefill: the open visit's own saved readings win; otherwise the most
+  // recent visit's (device prefill arrives with the device layer).
+  var src = openRow || last;
+  $('ci-ph').value = src && src.ph != null ? src.ph : '';
+  $('ci-orp').value = src && src.orp != null ? src.orp : '';
+  $('ci-tds').value = src && src.tds != null ? src.tds : '';
+  $('ci-temp').value = src && src.temp != null ? src.temp : '';
+  $('ci-fc').value = openRow && openRow.fc != null ? openRow.fc : '';
+  $('ci-tc').value = openRow && openRow.tc != null ? openRow.tc : '';
+  $('ci-ta').value = openRow && openRow.ta != null ? openRow.ta : '';
+  $('ci-th').value = openRow && openRow.th != null ? openRow.th : '';
+  $('ci-stab').value = openRow && openRow.stabilizer != null ? openRow.stabilizer : '';
+  $('ci-notes').value = openRow && openRow.notes ? openRow.notes : '';
+  $('ci-prefill-note').textContent = openRow
+    ? 'Showing this visit\u2019s saved details — edit and tap Save details to update.'
+    : (last ? 'Pre-filled from the last visit — confirm or correct before saving.' : '');
   showErr('ci-err',''); showOk('ci-ok','');
   $('ci-checklist').innerHTML = steps.map(function(s, i){
     return '<label class="checkrow"><input type="checkbox" id="ci-step-' + i + '"><span>' + esc(s) + '</span></label>';
   }).join('');
   $('ci-photoprev').innerHTML = '';
   $('ci-photos').value = '';
+  refreshCiChrome();
+  if(openInfo && navigator.onLine){
+    var vid = openInfo.visitId;
+    sb.from('visit_checklist').select('step_label, done').eq('visit_id', vid).then(function(r){
+      if(!ci || ci.visitId !== vid) return;
+      var doneMap = {};
+      (r.data || []).forEach(function(row){ doneMap[row.step_label] = row.done; });
+      ci.steps.forEach(function(s, i){
+        var box = $('ci-step-' + i);
+        if(box && doneMap[s]) box.checked = true;
+      });
+    });
+  }
   window.scrollTo(0, 0);
 }
 $('btn-back-route').addEventListener('click', function(){ ci = null; showTab('route'); });
+$('btn-checkin').addEventListener('click', function(){
+  if(!ci || ci.visitId) return;
+  var btn = $('btn-checkin');
+  btn.disabled = true; btn.textContent = 'Checking in…';
+  doCheckin(ci.customer).then(function(info){
+    ci.visitId = info.visitId;
+    ci.startedAt = new Date(info.startedAt);
+    btn.disabled = false; btn.textContent = 'Check In';
+    refreshCiChrome();
+    showOk('ci-ok', 'Checked in at ' + fmtTime(info.startedAt) + '. Add any details below — or just Check Out when you leave.');
+  });
+});
 
 function compressImage(file){
   return new Promise(function(res){
@@ -379,28 +564,49 @@ function dataURLToBlob(d){
   return fetch(d).then(function(r){ return r.blob(); });
 }
 
-function buildVisitPayload(){
-  var finished = new Date();
-  var visit = {
-    business_id: me.business_id,
-    customer_id: ci.customer.id,
-    body_id: ci.customer._bodyId || null,
-    tech_id: me.id,
-    started_at: ci.startedAt.toISOString(),
-    finished_at: finished.toISOString(),
-    duration_sec: Math.max(0, Math.round((finished - ci.startedAt) / 1000)),
-    label: 'Web Check-In',
-    ph: num('ci-ph'), orp: num('ci-orp'), temp: num('ci-temp'),
-    fc: num('ci-fc'), tc: num('ci-tc'), tds: num('ci-tds'),
-    ta: num('ci-ta'), th: num('ci-th'), stabilizer: num('ci-stab'),
-    notes: $('ci-notes').value.trim() || null
+function collectDetails(){
+  return {
+    fields: {
+      ph: num('ci-ph'), orp: num('ci-orp'), temp: num('ci-temp'),
+      fc: num('ci-fc'), tc: num('ci-tc'), tds: num('ci-tds'),
+      ta: num('ci-ta'), th: num('ci-th'), stabilizer: num('ci-stab'),
+      notes: $('ci-notes').value.trim() || null
+    },
+    checklist: ci.steps.map(function(s, i){
+      return { step_label: s, done: $('ci-step-' + i).checked };
+    })
   };
-  var checklist = ci.steps.map(function(s, i){
-    return { step_label: s, done: $('ci-step-' + i).checked };
-  });
-  return { visit: visit, checklist: checklist };
 }
 
+function saveDetailsOnline(visitId, details, photoBlobs){
+  return sb.from('visits').update(details.fields).eq('id', visitId).then(function(r){
+    if(r.error) throw r.error;
+    return sb.from('visit_checklist').delete().eq('visit_id', visitId);
+  }).then(function(r){
+    if(r && r.error) throw r.error;
+    var chain = Promise.resolve();
+    details.checklist.forEach(function(item){
+      chain = chain.then(function(){
+        return sb.from('visit_checklist').insert({ business_id: me.business_id, visit_id: visitId, step_label: item.step_label, done: item.done })
+          .then(function(rr){ if(rr.error) throw rr.error; });
+      });
+    });
+    photoBlobs.forEach(function(blob, i){
+      chain = chain.then(function(){
+        var path = me.business_id + '/' + visitId + '/' + Date.now() + '-' + i + '.jpg';
+        return sb.storage.from('visit-photos').upload(path, blob, { contentType: 'image/jpeg' })
+          .then(function(rr){
+            if(rr.error) throw rr.error;
+            return sb.from('visit_photos').insert({ business_id: me.business_id, visit_id: visitId, storage_path: path });
+          }).then(function(rr){ if(rr && rr.error) throw rr.error; });
+      });
+    });
+    return chain;
+  });
+}
+
+// Used only to flush legacy queue items written by the pre-one-tap version
+// (a whole visit saved in one go).
 function submitVisitOnline(payload, photoBlobs){
   return sb.from('visits').insert(payload.visit).select().single().then(function(v){
     if(v.error) throw v.error;
@@ -426,32 +632,46 @@ function submitVisitOnline(payload, photoBlobs){
   });
 }
 
-$('btn-complete-visit').addEventListener('click', function(){
-  if(!ci) return;
+$('btn-save-details').addEventListener('click', function(){
+  if(!ci || !ci.visitId) return;
   showErr('ci-err',''); showOk('ci-ok','');
-  var payload = buildVisitPayload();
-  var customerId = ci.customer.id;
-  var finish = function(savedNote){
-    markPending(customerId);
-    ci = null;
-    showTab('route');
-  };
+  var details = collectDetails();
+  var blobs = ci.photos.slice();
+  var visitId = ci.visitId;
+  var clearPhotos = function(){ ci.photos = []; $('ci-photoprev').innerHTML = ''; $('ci-photos').value = ''; };
   if(navigator.onLine){
-    submitVisitOnline(payload, ci.photos).then(function(){
-      showOk('ci-ok','');
-      finish();
+    saveDetailsOnline(visitId, details, blobs).then(function(){
+      clearPhotos();
+      showOk('ci-ok','Details saved.');
     }).catch(function(){
-      queueVisit(payload, ci.photos).then(finish);
+      queueDetails(visitId, details, blobs).then(function(){
+        clearPhotos();
+        showOk('ci-ok','Saved on this phone — will sync when you have signal.');
+      });
     });
   } else {
-    queueVisit(payload, ci.photos).then(finish);
+    queueDetails(visitId, details, blobs).then(function(){
+      clearPhotos();
+      showOk('ci-ok','Saved on this phone — will sync when you have signal.');
+    });
   }
 });
-function queueVisit(payload, photoBlobs){
+function queueDetails(visitId, details, photoBlobs){
   return Promise.all(photoBlobs.map(blobToDataURL)).then(function(urls){
-    return queueAdd({ visit: payload.visit, checklist: payload.checklist, photoDataUrls: urls, customerId: payload.visit.customer_id, queuedAt: Date.now() });
+    return queueAdd({ type: 'details', visitId: visitId, fields: details.fields, checklist: details.checklist, photoDataUrls: urls, queuedAt: Date.now() });
   }).then(updateQueueBar);
 }
+$('btn-checkout').addEventListener('click', function(){
+  if(!ci || !ci.visitId) return;
+  var cust = ci.customer;
+  var info = { visitId: ci.visitId, startedAt: ci.startedAt.toISOString() };
+  var btn = $('btn-checkout');
+  btn.disabled = true; btn.textContent = 'Checking out…';
+  doCheckoutFor(cust, info).then(function(){
+    ci = null;
+    showTab('route');
+  });
+});
 function updateQueueBar(){
   queueAll().then(function(items){
     var bar = $('queuebar');
@@ -467,14 +687,30 @@ function flushQueue(){
     var chain = Promise.resolve();
     items.forEach(function(item){
       chain = chain.then(function(){
-        return Promise.all((item.photoDataUrls || []).map(dataURLToBlob)).then(function(blobs){
-          return submitVisitOnline({ visit: item.visit, checklist: item.checklist }, blobs);
-        }).then(function(){ return queueRemove(item.qid); })
+        var op;
+        if(item.type === 'checkin'){
+          op = sb.from('visits').upsert(item.visit).then(function(r){ if(r.error) throw r.error; });
+        } else if(item.type === 'details'){
+          op = Promise.all((item.photoDataUrls || []).map(dataURLToBlob)).then(function(blobs){
+            return saveDetailsOnline(item.visitId, { fields: item.fields, checklist: item.checklist }, blobs);
+          });
+        } else if(item.type === 'checkout'){
+          op = sb.from('visits').update(item.patch).eq('id', item.visitId).then(function(r){
+            if(r.error) throw r.error;
+            clearLocalOpen(item.customerId, item.visitId);
+          });
+        } else {
+          // Legacy queue item (pre one-tap): a whole visit saved in one go.
+          op = Promise.all((item.photoDataUrls || []).map(dataURLToBlob)).then(function(blobs){
+            return submitVisitOnline({ visit: item.visit, checklist: item.checklist }, blobs);
+          });
+        }
+        return op.then(function(){ return queueRemove(item.qid); })
           .catch(function(){ /* leave in queue for next time */ });
       });
     });
     return chain;
-  }).then(function(){ updateQueueBar(); });
+  }).then(function(){ updateQueueBar(); if(me) renderRoute(); });
 }
 window.addEventListener('online', flushQueue);
 

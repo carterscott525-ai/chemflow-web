@@ -2,7 +2,7 @@
 // immediately when online; the cache is the offline fallback (the app queues
 // offline data work itself in IndexedDB). Bump CACHE on every shell change
 // so old caches are dropped on activate.
-var CACHE = 'chemflow-v2';
+var CACHE = 'chemflow-v4';
 var SHELL = ['.', 'index.html', 'app.js', 'config.js', 'manifest.json'];
 
 self.addEventListener('install', function(e){

@@ -26,6 +26,12 @@ check-in/out with chemistry, Standard Visit checklist (owner-editable),
 photos (compressed client-side, stored per-business in the `visit-photos`
 bucket), notes, offline queue.
 
+Check-in is one tap (Carter's rule): tapping Check In records the time and,
+if the phone offers it within ~3.5s, the GPS location — nothing else is
+required. Chemistry, checklist, photos and notes are optional details that
+can be added any time before Check Out; each stage (check-in, details,
+check-out) queues offline independently and syncs in order.
+
 Known Phase 1 simplifications: techs can see all in-business visits
 (route context); email confirmation is OFF in the Supabase project for the
 pilot (turn ON before public launch); no password-reset email flow yet.
