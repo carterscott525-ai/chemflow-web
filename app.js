@@ -896,6 +896,7 @@ var editTypes = null;
 function money(n){ var v = parseFloat(n); if(isNaN(v)) v = 0; return '$' + v.toFixed(2); }
 function numOr(id, fb){ var v = num(id); return v == null ? fb : v; }
 function custName(id){ var c = customersCache.filter(function(x){ return x.id === id; })[0]; return c ? c.name : 'Customer'; }
+function techNameOf(id){ var p = id && profilesMap[id]; return p ? (p.name || p.email) : 'Unassigned'; }
 function parseDateOnly(s){ if(!s) return null; var p = String(s).split('-'); return new Date(+p[0], +p[1] - 1, +p[2]); }
 function fmtDateOnly(s){ var d = parseDateOnly(s); return d ? d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : ''; }
 function dueInfo(eq){
