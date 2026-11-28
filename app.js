@@ -1,4 +1,4 @@
-// ChemFlow Web — Phase 1 app logic
+// ChemFlow Web — app logic (Phase 1 field core + one-tap check-in + Phase 2 office)
 // Multi-tenant PWA on Supabase (Postgres + Auth + Storage, RLS-enforced tenancy).
 (function(){
 'use strict';
@@ -723,6 +723,7 @@ window.addEventListener('online', flushQueue);
 function renderCustomers(){
   var isOwner = me.role === 'owner';
   $('cust-form-card').classList.toggle('hidden', !isOwner);
+  if(!editingCustomerId) resetCustomerForm(); // fresh defaults each visit to the tab
   var techSel = $('cf-tech');
   techSel.innerHTML = '<option value="">Unassigned</option>' + Object.keys(profilesMap).map(function(id){
     var p = profilesMap[id];
