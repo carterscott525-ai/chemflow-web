@@ -32,6 +32,21 @@ required. Chemistry, checklist, photos and notes are optional details that
 can be added any time before Check Out; each stage (check-in, details,
 check-out) queues offline independently and syncs in order.
 
+## Phase 2 scope (business ops)
+
+Office tab: quotes → jobs → invoices (approving a quote creates the job;
+completing a job with an amount creates its unpaid invoice — owner-created
+if a tech completes it, via a "Create invoice" button), equipment with
+service-due tracking (overdue / due-soon flags, "Serviced today," clean-job
+creation), and an owner reports dashboard (visits today/week, per-tech
+counts, unpaid totals, quotes awaiting approval, equipment due). Jobs
+scheduled for today also appear on the route under the stops. Customer
+detail view: bodies of water manager, the customer's equipment, and visit
+history. Settings gains business defaults (pH/ORP pre-filled for new
+customers) and a service-types list. Office actions are online-only in
+Phase 2 (no offline queue); the field check-in flow keeps its queue.
+Schema additions live in `phase2.sql` (already merged into `schema.sql`).
+
 Known Phase 1 simplifications: techs can see all in-business visits
 (route context); email confirmation is OFF in the Supabase project for the
 pilot (turn ON before public launch); no password-reset email flow yet.

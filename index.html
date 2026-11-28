@@ -47,6 +47,13 @@
   .queuebar{ background:#fdf3e0; color:var(--amber); border:1px solid #ecd9ac; border-radius:10px; padding:10px 12px; font-size:14px; margin-bottom:12px; display:none; }
   .stepitem{ display:flex; gap:8px; align-items:center; margin-bottom:8px; }
   .stepitem input{ flex:1; }
+  .pills{ display:flex; gap:6px; flex-wrap:wrap; margin-bottom:12px; }
+  .pills button{ background:#fff; border:1px solid var(--teal); color:var(--teal); border-radius:999px; padding:8px 14px; font-size:14px; font-weight:600; }
+  .pills button.active{ background:var(--teal); color:#fff; }
+  .stats{ display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+  .stat{ background:var(--card); border:1px solid var(--line); border-radius:14px; padding:12px; }
+  .stat .n{ font-size:22px; font-weight:700; }
+  .stat .l{ font-size:12px; color:var(--mut); }
   h2.viewtitle{ font-size:20px; margin:6px 0 12px; }
   .photoprev{ display:flex; gap:8px; flex-wrap:wrap; margin-top:8px; }
   .photoprev img{ width:72px; height:72px; object-fit:cover; border-radius:8px; border:1px solid var(--line); }
@@ -95,6 +102,7 @@
     <div id="tab-route">
       <h2 class="viewtitle" id="route-title">Today's Stops</h2>
       <div id="route-list"></div>
+      <div id="route-jobs"></div>
       <p class="muted" id="route-empty" class="hidden"></p>
     </div>
 
@@ -177,6 +185,112 @@
       </div>
     </div>
 
+    <!-- OFFICE (Phase 2) -->
+    <div id="tab-office" class="hidden">
+      <h2 class="viewtitle">Office</h2>
+      <div class="pills" id="office-pills">
+        <button data-office="quotes" class="active">Quotes</button>
+        <button data-office="jobs">Jobs</button>
+        <button data-office="invoices">Invoices</button>
+        <button data-office="equipment">Equipment</button>
+        <button data-office="reports">Reports</button>
+      </div>
+
+      <div id="office-quotes">
+        <div class="card" id="quote-form-card">
+          <h3>New quote</h3>
+          <div class="err" id="qf-err"></div>
+          <label>Customer</label><select id="qf-customer"></select>
+          <label>Title</label><input id="qf-title" type="text" placeholder="e.g. Pump replacement">
+          <label>Amount ($)</label><input id="qf-amount" type="number" step="0.01" inputmode="decimal">
+          <label>Details (optional)</label><textarea id="qf-details" placeholder="What's included…"></textarea>
+          <button class="primary" id="btn-quote-save">Save quote</button>
+        </div>
+        <div id="quotes-list"></div>
+      </div>
+
+      <div id="office-jobs" class="hidden">
+        <div class="card" id="job-form-card">
+          <h3>New job</h3>
+          <div class="err" id="jf-err"></div>
+          <label>Customer</label><select id="jf-customer"></select>
+          <label>Title</label><input id="jf-title" type="text" placeholder="e.g. Filter clean">
+          <div class="grid2">
+            <div><label>Service type</label><input id="jf-type" type="text" list="jf-types" placeholder="Optional"><datalist id="jf-types"></datalist></div>
+            <div><label>Amount ($)</label><input id="jf-amount" type="number" step="0.01" inputmode="decimal"></div>
+          </div>
+          <div class="grid2">
+            <div><label>Scheduled date</label><input id="jf-date" type="date"></div>
+            <div><label>Technician</label><select id="jf-tech"></select></div>
+          </div>
+          <label>Details (optional)</label><textarea id="jf-details" placeholder="Notes for the tech…"></textarea>
+          <button class="primary" id="btn-job-save">Save job</button>
+        </div>
+        <div id="jobs-list"></div>
+      </div>
+
+      <div id="office-invoices" class="hidden">
+        <div class="card" id="invoice-form-card">
+          <h3>New invoice</h3>
+          <div class="err" id="inf-err"></div>
+          <label>Customer</label><select id="inf-customer"></select>
+          <label>Title</label><input id="inf-title" type="text" placeholder="e.g. Monthly service — December">
+          <label>Amount ($)</label><input id="inf-amount" type="number" step="0.01" inputmode="decimal">
+          <button class="primary" id="btn-invoice-save">Save invoice</button>
+          <p class="muted">Invoices are also created automatically when a job with an amount is completed.</p>
+        </div>
+        <div id="invoices-list"></div>
+      </div>
+
+      <div id="office-equipment" class="hidden">
+        <div class="card" id="equip-form-card">
+          <h3>Add equipment</h3>
+          <div class="err" id="ef-err"></div>
+          <label>Customer</label><select id="ef-customer"></select>
+          <label>Name</label><input id="ef-name" type="text" placeholder="e.g. Main filter">
+          <label>Type (optional)</label><input id="ef-kind" type="text" placeholder="e.g. Cartridge filter, Pump, Heater">
+          <div class="grid2">
+            <div><label>Installed on</label><input id="ef-installed" type="date"></div>
+            <div><label>Last serviced</label><input id="ef-last" type="date"></div>
+          </div>
+          <label>Service every (days)</label><input id="ef-interval" type="number" inputmode="numeric" value="90">
+          <label>Notes (optional)</label><textarea id="ef-notes"></textarea>
+          <label>Photo (optional)</label>
+          <input id="ef-photo" type="file" accept="image/*">
+          <div class="photoprev" id="ef-photoprev"></div>
+          <button class="primary" id="btn-equip-save">Save equipment</button>
+        </div>
+        <div id="equip-list"></div>
+      </div>
+
+      <div id="office-reports" class="hidden">
+        <div id="reports-wrap"></div>
+      </div>
+    </div>
+
+    <!-- CUSTOMER DETAIL -->
+    <div id="tab-customer" class="hidden">
+      <button class="ghost small" id="btn-back-customers">← Back to customers</button>
+      <h2 class="viewtitle" id="cd-name" style="margin-top:10px;">Customer</h2>
+      <div class="card" id="cd-info"></div>
+      <div class="card">
+        <h3>Bodies of water</h3>
+        <div id="cd-bodies"></div>
+        <div class="stepitem">
+          <input id="cd-body-new" type="text" placeholder="Add a body of water… (e.g. Spa)">
+          <button class="ghost small" id="btn-body-add">Add</button>
+        </div>
+      </div>
+      <div class="card">
+        <h3>Equipment</h3>
+        <div id="cd-equipment"></div>
+      </div>
+      <div class="card">
+        <h3>Visit history</h3>
+        <div id="cd-history"></div>
+      </div>
+    </div>
+
     <!-- TEAM -->
     <div id="tab-team" class="hidden">
       <h2 class="viewtitle">Team</h2>
@@ -207,6 +321,28 @@
         <div class="ok" id="steps-ok"></div>
       </div>
       <div class="card">
+        <h3>Business defaults</h3>
+        <p class="muted">Pre-filled for new customers. Existing customers keep their own limits.</p>
+        <div class="grid2">
+          <div><label>pH min</label><input id="sd-phmin" type="number" step="0.1"></div>
+          <div><label>pH max</label><input id="sd-phmax" type="number" step="0.1"></div>
+          <div><label>ORP min</label><input id="sd-orpmin" type="number"></div>
+          <div><label>ORP max</label><input id="sd-orpmax" type="number"></div>
+        </div>
+        <button class="primary" id="btn-defaults-save">Save defaults</button>
+        <div class="ok" id="sd-ok"></div>
+      </div>
+      <div class="card">
+        <h3>Service types</h3>
+        <div id="types-list"></div>
+        <div class="stepitem">
+          <input id="type-new" type="text" placeholder="Add a service type…">
+          <button class="ghost small" id="btn-type-add">Add</button>
+        </div>
+        <button class="primary" id="btn-types-save">Save service types</button>
+        <div class="ok" id="types-ok"></div>
+      </div>
+      <div class="card">
         <h3>About</h3>
         <p class="muted" id="about-line"></p>
       </div>
@@ -217,6 +353,7 @@
 <nav class="tabs hidden" id="tabbar">
   <button data-tab="route" class="active">Today's Stops</button>
   <button data-tab="customers">Customers</button>
+  <button data-tab="office">Office</button>
   <button data-tab="team">Team</button>
   <button data-tab="settings">Settings</button>
 </nav>
